@@ -1,20 +1,62 @@
-This repository contains the reproduced code for the paper [Neural Common Neighbor with Completion for Link Prediction](https://arxiv.org/pdf/2302.00890.pdf).
+# NCN — Experiment Notebooks
 
-```
-For Term Project:
-CS60078 - Complex Network Theory @IIT Kharagpur
-Members -
-Shreyan Naskar 25CS60R41
-Swagnik Ghosh 25CS60R67
-```
+Extends the paper [Neural Common Neighbor with Completion for Link Prediction](https://arxiv.org/pdf/2302.00890.pdf) with three new aggregation variants built on top of the base NCN model.
 
-**Environment**
+---
 
-Tested Combination:
-torch 1.13.0 + pyg 2.2.0 + ogb 1.3.5
+## Implemented Models
 
-```
+| Notebook                | Predictor      | Type | Aggregation                                          |
+| ----------------------- | -------------- | ---- | ---------------------------------------------------- |
+| `00_baseline.ipynb`     | `cn1`          | NCN  | Sum pooling over common neighbours                   |
+| `01_attncn1.ipynb`      | `attncn1`      | NCN  | Learned dot-product encoder with degree-aware biases |
+| `02_graphattncn1.ipynb` | `graphattncn1` | NCN  | Graphormer encoding + attention pooling over CNs     |
+
+### What Each Variant Adds
+
+**Attention (`attncn1`)**
+
+- Replaces sum pooling with a learned per-neighbour attention weight
+- Each common neighbour `w` is scored against the target pair `(u, v)` using features `[h_u, h_v, h_w, h_u ⊙ h_v]`
+- Softmax-normalised weights produce a weighted sum instead of a plain sum
+- AMP disabled — FP16 overflows in the softmax
+
+
+**Graphormer + Attention (`graphattncn1`)**
+
+- Runs the full Graphormer encoder over CN tokens (same centrality + spatial bias as above)
+- Replaces the final mean pooling with **attention pooling**: each Graphormer-enriched token is scored against the target pair `(u, v)` using features `[h_w', h_u, h_v, h_u ⊙ h_v]`, softmax-normalised weights produce a weighted sum
+- Combines structural awareness from Graphormer with pair-conditioned selectivity from attention
+- AMP enabled
+
+### Improvement Stack (applied to all variants)
+
+| Flag                 | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `use_aa=True`        | Adds Adamic-Adar edge score as an extra input feature                  |
+| `use_ra=True`        | Adds Resource-Allocation edge score as an extra input feature          |
+| `use_diff_feat=True` | Appends element-wise difference `\|h_u − h_v\|` to the predictor input |
+| `grad_clip=1.0`      | Clips gradient norm to 1.0 during training                             |
+
+---
+
+## Setup
+
+**1. Create the environment**
+
+```bash
 conda env create -f env.yaml
+conda activate cnt
+```
+
+Tested with: PyTorch 1.13 + PyG 2.2 + OGB 1.3.5
+
+**2. Install Jupyter**
+
+```bash
+conda install jupyter
+# or
+pip install notebook
 ```
 
 **Prepare Datasets**
@@ -23,49 +65,31 @@ conda env create -f env.yaml
 python ogbdataset.py
 ```
 
-**Reproduce Results**
+---
 
-We implement the following models.
+## Running the Notebooks
 
-| name     | $model   | command change                   |
-| -------- | -------- | -------------------------------- |
-| GAE      | cn0      |                                  |
-| NCN      | cn1      |                                  |
-| NCNC     | incn1cn1 |                                  |
-| NCNC2    | incn1cn1 | add --depth 2 --splitsize 131072 |
-| GAE+CN   | scn1     |                                  |
-| NCN2     | cn1.5    |                                  |
-| NCN-diff | cn1res   |                                  |
-| NoTLR    | cn1      | delete --maskinput               |
+Launch Jupyter from the `experiments/` directory:
 
-To reproduce the results, please modify the following commands as shown in the table above.
-
-Cora
-
-```
-python NeighborOverlap.py   --xdp 0.7 --tdp 0.3 --pt 0.75 --gnnedp 0.0 --preedp 0.4 --predp 0.05 --gnndp 0.05  --probscale 4.3 --proboffset 2.8 --alpha 1.0  --gnnlr 0.0043 --prelr 0.0024  --batch_size 1152  --ln --lnnn --predictor $model --dataset Cora  --epochs 100 --runs 10 --model puregcn --hiddim 256 --mplayers 1  --testbs 8192  --maskinput  --jk  --use_xlin  --tailact
+```bash
+cd experiments/
+jupyter notebook
 ```
 
-Citeseer
+Then open any notebook inside `notebooks/`.
 
-```
-python NeighborOverlap.py   --xdp 0.4 --tdp 0.0 --pt 0.75 --gnnedp 0.0 --preedp 0.0 --predp 0.55 --gnndp 0.75  --probscale 6.5 --proboffset 4.4 --alpha 0.4  --gnnlr 0.0085 --prelr 0.0078  --batch_size 384  --ln --lnnn --predictor $model --dataset Citeseer  --epochs 100 --runs 10 --model puregcn --hiddim 256 --mplayers 1  --testbs 4096  --maskinput  --jk  --use_xlin  --tailact  --twolayerlin
-```
+### Notebook Layout
 
-Pubmed
+Every notebook follows the same structure:
 
-```
-python NeighborOverlap.py   --xdp 0.3 --tdp 0.0 --pt 0.5 --gnnedp 0.0 --preedp 0.0 --predp 0.05 --gnndp 0.1  --probscale 5.3 --proboffset 0.5 --alpha 0.3  --gnnlr 0.0097 --prelr 0.002  --batch_size 2048  --ln --lnnn --predictor $model --dataset Pubmed  --epochs 100 --runs 10 --model puregcn --hiddim 256 --mplayers 1  --testbs 8192  --maskinput  --jk  --use_xlin  --tailact
-```
+| Cell          | Purpose                                                            |
+| ------------- | ------------------------------------------------------------------ |
+| Imports       | Sets up sys.path, patches torch.load, imports utils                |
+| Device check  | Prints GPU name and available VRAM                                 |
+| Configuration | Sets `PREDICTOR`, `CFG` dict, CSV path, and `save_result()` helper |
+| Experiments   | One markdown + one code cell per dataset                           |
 
-collab
+### Running a Single Dataset
 
-```
-python NeighborOverlap.py   --xdp 0.25 --tdp 0.05 --pt 0.1 --gnnedp 0.25 --preedp 0.0 --predp 0.3 --gnndp 0.1  --probscale 2.5 --proboffset 6.0 --alpha 1.05  --gnnlr 0.0082 --prelr 0.0037  --batch_size 65536  --ln --lnnn --predictor $model --dataset collab  --epochs 100 --runs 10 --model gcn --hiddim 64 --mplayers 1  --testbs 131072  --maskinput --use_valedges_as_input   --res  --use_xlin  --tailact
-```
+Each dataset has its own independent cell — you can run just that cell without running any other. Results are automatically saved to `results.csv` after each run and any previous entry for that `(dataset, predictor)` pair is replaced.
 
-ppa
-
-```
-python NeighborOverlap.py  --xdp 0.0 --tdp 0.0 --gnnedp 0.1 --preedp 0.0 --predp 0.1 --gnndp 0.0 --gnnlr 0.0013 --prelr 0.0013  --batch_size 16384  --ln --lnnn --predictor $model --dataset ppa   --epochs 25 --runs 10 --model gcn --hiddim 64 --mplayers 3 --maskinput  --tailact  --res  --testbs 65536 --proboffset 8.5 --probscale 4.0 --pt 0.1 --alpha 0.9 --splitsize 131072
-```

@@ -1,11 +1,24 @@
 import torch
 from sklearn.metrics import roc_auc_score, average_precision_score
 from ogb.linkproppred import PygLinkPropPredDataset
+from pathlib import Path
+
+# PyTorch 2.6+ changed torch.load default to weights_only=True, which blocks
+# torch_geometric types embedded in OGB cached dataset files.
+try:
+    from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
+    from torch_geometric.data.storage import GlobalStorage
+    torch.serialization.add_safe_globals([DataEdgeAttr, DataTensorAttr, GlobalStorage])
+except (ImportError, AttributeError):
+    pass
 import torch_geometric.transforms as T
 from torch_sparse import SparseTensor
 from torch_geometric.datasets import Planetoid
 from torch_geometric.utils import train_test_split_edges, negative_sampling, to_undirected
 from torch_geometric.transforms import RandomLinkSplit
+
+
+DATASET_ROOT = Path(__file__).resolve().parent / "dataset"
 
 # random split dataset
 def randomsplit(dataset, val_ratio: float=0.10, test_ratio: float=0.2):
@@ -28,14 +41,14 @@ def randomsplit(dataset, val_ratio: float=0.10, test_ratio: float=0.2):
 
 def loaddataset(name: str, use_valedges_as_input: bool, load=None):
     if name in ["Cora", "Citeseer", "Pubmed"]:
-        dataset = Planetoid(root="dataset", name=name)
+        dataset = Planetoid(root=str(DATASET_ROOT), name=name)
         split_edge = randomsplit(dataset)
         data = dataset[0]
         data.edge_index = to_undirected(split_edge["train"]["edge"].t())
         edge_index = data.edge_index
         data.num_nodes = data.x.shape[0]
     else:
-        dataset = PygLinkPropPredDataset(name=f'ogbl-{name}')
+        dataset = PygLinkPropPredDataset(name=f'ogbl-{name}', root=str(DATASET_ROOT))
         split_edge = dataset.get_edge_split()
         data = dataset[0]
         edge_index = data.edge_index
